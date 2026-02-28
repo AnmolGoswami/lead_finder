@@ -130,13 +130,7 @@ public class Lead {
     /**
      * Lead workflow status
      */
-    public enum LeadStatus {
-        NEW,
-        VERIFIED,
-        EXPORTED,
-        DUPLICATE,
-        INVALID
-    }
+
 
     /**
      * Helper method called before saving in LeadService
