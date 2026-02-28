@@ -2,8 +2,9 @@ package com.lead_finder.service;
 
 
 
-import com.leadfinder.entity.Lead;
-import com.leadfinder.repository.LeadRepository;
+
+import com.lead_finder.entity.Lead;
+import com.lead_finder.repository.LeadRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;

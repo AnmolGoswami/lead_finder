@@ -1,11 +1,11 @@
 package com.lead_finder.service;
 
-package com.leadfinder.service;
 
-import com.leadfinder.dto.ScrapeResponse;
-import com.leadfinder.entity.Lead;
-import com.leadfinder.scraper.model.ScrapeRequest;
-import com.leadfinder.scraper.strategy.ScraperStrategy;
+import com.lead_finder.dto.LeadResponse;
+import com.lead_finder.dto.ScrapeResponse;
+import com.lead_finder.entity.Lead;
+import com.lead_finder.scraper.model.ScrapeRequest;
+import com.lead_finder.scraper.strategy.ScraperStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -101,7 +101,11 @@ public class ScraperService {
             // Save leads to database (only valid ones with phone)
             int savedCount = 0;
             if (response.isSuccess() && response.getLeads() != null && !response.getLeads().isEmpty()) {
-                savedCount = saveLeads(response.getLeads(), jobId);
+                List<Lead> leadEntities = response.getLeads().stream()
+                        .map(LeadResponse::toEntity)
+                        .collect(Collectors.toList());
+
+                savedCount = saveLeads(leadEntities, jobId);
             }
 
             response.setSavedCount(savedCount);

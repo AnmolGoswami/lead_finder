@@ -2,9 +2,9 @@ package com.lead_finder.service;
 
 
 
-import com.leadfinder.dto.ScrapeResponse;
-import com.leadfinder.scraper.model.ScrapeRequest;
-import com.leadfinder.scraper.strategy.ScraperStrategy;
+
+import com.lead_finder.dto.ScrapeResponse;
+import com.lead_finder.scraper.model.ScrapeRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -173,9 +173,7 @@ public class JobService {
     /**
      * Job Status Enum
      */
-    public enum JobStatus {
-        PENDING, RUNNING, COMPLETED, FAILED
-    }
+
 
     /**
      * Immutable-ish job tracking object (can be easily converted to JPA entity later).

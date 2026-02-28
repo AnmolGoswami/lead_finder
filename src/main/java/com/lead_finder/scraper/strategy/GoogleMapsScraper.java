@@ -3,11 +3,12 @@ package com.lead_finder.scraper.strategy;
 
 
 
-import com.leadfinder.dto.ScrapeResponse;
-import com.leadfinder.entity.Lead;
-import com.leadfinder.scraper.model.ScrapeRequest;
-import com.leadfinder.scraper.util.DelayUtil;
-import com.leadfinder.scraper.util.ScraperUtils;
+
+import com.lead_finder.dto.ScrapeResponse;
+import com.lead_finder.entity.Lead;
+import com.lead_finder.scraper.model.ScrapeRequest;
+import com.lead_finder.scraper.util.DelayUtil;
+import com.lead_finder.scraper.util.ScraperUtils;
 import org.openqa.selenium.*;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
