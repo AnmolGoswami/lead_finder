@@ -4,8 +4,10 @@ package com.lead_finder.scraper.strategy;
 
 
 
+import com.lead_finder.dto.LeadResponse;
 import com.lead_finder.dto.ScrapeResponse;
 import com.lead_finder.entity.Lead;
+import com.lead_finder.entity.LeadStatus;
 import com.lead_finder.scraper.model.ScrapeRequest;
 import com.lead_finder.scraper.util.DelayUtil;
 import com.lead_finder.scraper.util.ScraperUtils;
@@ -125,10 +127,14 @@ public class GoogleMapsScraper implements ScraperStrategy {
             log.info("Google Maps scrape completed | leadsFound={} (no-website only) | duration={}ms",
                     leads.size(), System.currentTimeMillis() - startTime);
 
+            List<LeadResponse> leadResponses = leads.stream()
+                    .map(LeadResponse::fromEntity)   // or your mapping method
+                    .toList();
+
             return ScrapeResponse.builder()
                     .source(getSourceName())
-                    .leads(leads)
-                    .totalFound(leads.size())
+                    .leads(leadResponses)
+                    .totalFound(leadResponses.size())
                     .success(true)
                     .durationMs(System.currentTimeMillis() - startTime)
                     .jobId(request.getJobId())
@@ -182,7 +188,7 @@ public class GoogleMapsScraper implements ScraperStrategy {
                 .city(request.getLocation())
                 .source("GoogleMaps")
                 .jobId(request.getJobId())
-                .status(Lead.LeadStatus.NEW);
+                .status(LeadStatus.NEW);
 
         // Name
         String name = scraperUtils.safeGetText(driver, NAME_SELECTOR, "Unknown Business");

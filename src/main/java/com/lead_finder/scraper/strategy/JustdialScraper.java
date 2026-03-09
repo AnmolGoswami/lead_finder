@@ -3,8 +3,10 @@ package com.lead_finder.scraper.strategy;
 
 
 
+import com.lead_finder.dto.LeadResponse;
 import com.lead_finder.dto.ScrapeResponse;
 import com.lead_finder.entity.Lead;
+import com.lead_finder.entity.LeadStatus;
 import com.lead_finder.scraper.model.ScrapeRequest;
 import com.lead_finder.scraper.util.DelayUtil;
 import com.lead_finder.scraper.util.ScraperUtils;
@@ -136,10 +138,14 @@ public class JustdialScraper implements ScraperStrategy {
             log.info("Justdial scrape completed | leadsFound={} (no-website) | pages={} | duration={}ms",
                     leads.size(), page, duration);
 
+            List<LeadResponse> leadResponses = leads.stream()
+                    .map(LeadResponse::fromEntity)
+                    .toList();
+
             return ScrapeResponse.builder()
                     .source(getSourceName())
-                    .leads(leads)
-                    .totalFound(leads.size())
+                    .leads(leadResponses)
+                    .totalFound(leadResponses.size())
                     .success(true)
                     .durationMs(duration)
                     .jobId(request.getJobId())
@@ -177,12 +183,16 @@ public class JustdialScraper implements ScraperStrategy {
                 .city(request.getLocation())
                 .source("Justdial")
                 .jobId(request.getJobId())
-                .status(Lead.LeadStatus.NEW)
+                .status(LeadStatus.NEW)
                 .justdialUrl(driver.getCurrentUrl());
 
         // Business Name (multiple selectors)
-        String name = scraperUtils.safeGetTextWithFallbacks(driver,
-                NAME_SELECTORS, By.tagName("h1"), "Unknown Business");
+        String name = scraperUtils.safeGetTextWithFallbacks(
+                driver,
+                "Unknown Business",
+                NAME_SELECTORS,
+                By.tagName("h1")
+        );
         builder.businessName(name);
 
         // Phone - click "Get Phone No." if present
@@ -191,7 +201,7 @@ public class JustdialScraper implements ScraperStrategy {
                 scraperUtils.safeClick(driver, PHONE_BUTTON);
                 delayUtil.randomDelay(1200, 2500);
             }
-            String phone = scraperUtils.safeGetTextWithFallbacks(driver, PHONE_TEXT, "");
+            String phone = scraperUtils.safeGetTextWithFallbacks(driver, "", PHONE_TEXT);
             if (!phone.isEmpty()) {
                 builder.phoneNumber(phone.replaceAll("[^0-9+]", "").trim());
             }
@@ -215,12 +225,20 @@ public class JustdialScraper implements ScraperStrategy {
         }
 
         // Address & Locality
-        String address = scraperUtils.safeGetTextWithFallbacks(driver, ADDRESS_SELECTORS, "");
+        String address = scraperUtils.safeGetTextWithFallbacks(
+                driver,
+                "",
+                ADDRESS_SELECTORS
+        );
         builder.fullAddress(address);
         builder.locality(scraperUtils.extractLocalityFromAddress(address));
 
         // Rating & Reviews
-        String ratingStr = scraperUtils.safeGetTextWithFallbacks(driver, RATING_SELECTORS, "0");
+        String ratingStr = scraperUtils.safeGetTextWithFallbacks(
+                driver,
+                "0",
+                RATING_SELECTORS
+        );
         try {
             builder.rating(Double.parseDouble(ratingStr.replaceAll("[^0-9.]", "")));
         } catch (Exception ignored) {}

@@ -49,7 +49,7 @@ public class ScraperUtils {
     /**
      * Tries multiple selectors in order. Returns first non-empty text found.
      */
-    public String safeGetTextWithFallbacks(WebDriver driver, By... selectors) {
+    public String safeGetTextWithFallbacks(WebDriver driver, String defaultValue, By... selectors) {
         for (By selector : selectors) {
             try {
                 String text = safeGetText(driver, selector, "");
@@ -58,7 +58,7 @@ public class ScraperUtils {
                 }
             } catch (Exception ignored) {}
         }
-        return "";
+        return defaultValue;
     }
 
     /**
