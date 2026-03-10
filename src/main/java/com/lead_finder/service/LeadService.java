@@ -128,8 +128,9 @@ public class LeadService {
      * Delete all leads from a specific job (cleanup after export).
      */
     @Transactional
-    public void deleteByJobId(String jobId) {
+    public int deleteByJobId(String jobId) {
         int deleted = leadRepository.deleteByJobId(jobId);
         log.info("Deleted {} leads for JobId={}", deleted, jobId);
+        return  deleted;
     }
 }
