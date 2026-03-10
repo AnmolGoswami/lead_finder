@@ -28,42 +28,41 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
-/**
- * Industry-Grade Google Maps Scraper (2026 Ready)
- *
- * <p><b>Features:</b></p>
- * <ul>
- *   <li>Dynamic search URL: "hotels in Delhi"</li>
- *   <li>Infinite scroll with human-like behavior (random delay + small scrolls)</li>
- *   <li>Multiple fallback selectors (Google changes classes frequently)</li>
- *   <li>Opens each listing → extracts full details (name, phone, address, website, rating)</li>
- *   <li>Strict "NO WEBSITE" filter (your core requirement)</li>
- *   <li>Uses prototype WebDriver from WebDriverConfig</li>
- *   <li>MDC-aware logging (works with AsyncConfig)</li>
- *   <li>Graceful error handling per listing (one bad listing doesn't kill the job)</li>
- *   <li>Respects limit from ScrapeRequest</li>
- * </ul>
- *
- * Requires:
- * - ScrapeRequest with source="GoogleMaps"
- * - DelayUtil & ScraperUtils (already in your util package)
- */
+
+
+
+
 @Component
 public class GoogleMapsScraper implements ScraperStrategy {
 
     private static final Logger log = LoggerFactory.getLogger(GoogleMapsScraper.class);
 
-    private static final Duration WAIT_TIMEOUT = Duration.ofSeconds(15);
-    private static final int MAX_SCROLL_ATTEMPTS = 25;
+    private static final Duration WAIT_TIMEOUT = Duration.ofSeconds(25); // increased
+    private static final int MAX_SCROLL_ATTEMPTS = 60; // more attempts for slow loads
+    private static final int MAX_RETRIES_PER_CLICK = 2;
 
-    // 2026 stable selectors (updated from latest guides)
-    private static final By RESULTS_PANEL = By.cssSelector("div[role='feed'], c-wiz[role='list'], div.m6QErb");
-    private static final By RESULT_ITEMS = By.cssSelector("a[href*='/maps/place/'], div.Nv2PK, div[jsaction*='mouseover']");
-    private static final By NAME_SELECTOR = By.cssSelector("h1, div.fontHeadlineLarge, span.DkEaL");
-    private static final By PHONE_SELECTOR = By.cssSelector("button[data-tooltip='Copy phone number'], a[href^='tel:'], span[aria-label*='Phone']");
-    private static final By WEBSITE_SELECTOR = By.cssSelector("a[data-tooltip='Open website'], a[href^='http']:not([href*='google']), button[data-value='Website']");
-    private static final By ADDRESS_SELECTOR = By.cssSelector("div[aria-label*='Address'], span.DkEaL, button[data-tooltip='Copy address']");
-    private static final By RATING_SELECTOR = By.cssSelector("div[aria-label*='stars'], span.F7nice span");
+    // 2026 robust selectors – multiple fallbacks
+    private static final By RESULTS_PANEL = By.cssSelector(
+            "div[role='feed'], " +
+                    "div.m6QErb[role='main'], " +           // common main container
+                    "div[role='list'], " +
+                    "c-wiz[role='list'], " +
+                    "div.DkEaL-parent"                      // sometimes used
+    );
+
+    private static final By RESULT_ITEMS = By.cssSelector(
+            "div.Nv2PK, " +                         // still very common in 2026
+                    "div[role='listitem'], " +
+                    "a[href*='/maps/place/'], " +
+                    "div[jsaction*='mouseover:pane'], " +
+                    "div.tH5CWc"                            // frequent wrapper
+    );
+
+    private static final By NAME_SELECTOR = By.cssSelector("h1, div.fontHeadlineLarge, span.DkEaL, div.Io6YTe");
+    private static final By PHONE_SELECTOR = By.cssSelector("button[data-tooltip*='phone'], a[href^='tel:'], div[aria-label*='Phone'] span");
+    private static final By WEBSITE_SELECTOR = By.cssSelector("a[data-tooltip*='website'], a[href^='http']:not([href*='google']), button[aria-label*='Website']");
+    private static final By ADDRESS_SELECTOR = By.cssSelector("button[data-tooltip*='address'], div[aria-label*='Address'], span.DkEaL");
+    private static final By RATING_SELECTOR = By.cssSelector("div.F7nice span, span[aria-label*='stars'], div[role='img'][aria-label*='rating']");
 
     private final ObjectProvider<WebDriver> webDriverProvider;
     private final DelayUtil delayUtil;
@@ -89,59 +88,92 @@ public class GoogleMapsScraper implements ScraperStrategy {
         try {
             String query = request.getBusinessType() + " in " + request.getLocation();
             String url = "https://www.google.com/maps/search/" + URLEncoder.encode(query, StandardCharsets.UTF_8);
+
             log.info("Starting Google Maps scrape | query='{}' | limit={}", query, request.getLimit());
 
             driver.get(url);
-            delayUtil.randomDelay(3000, 5000); // initial load
+            delayUtil.longDelay(); // give initial map + sidebar time to load
 
-            // Wait for results panel
+            // Wait for results panel – more patient
             wait.until(ExpectedConditions.presenceOfElementLocated(RESULTS_PANEL));
+            log.info("Results panel detected");
 
-            // Scroll to load as many results as possible
+            // Aggressive but safe scrolling
             scrollResultsPanel(driver, wait);
 
-            // Get all result links
-            List<WebElement> resultElements = driver.findElements(RESULT_ITEMS);
-            log.info("Found {} result cards on Google Maps", resultElements.size());
-
+            // Process results – re-fetch list every single iteration
             int processed = 0;
-            for (WebElement result : resultElements) {
-                if (leads.size() >= request.getLimit()) break;
+            int previousCount = 0;
+            int stagnantCount = 0;
+            // Force maximize window – sometimes helps with visibility/clickability
+            driver.manage().window().maximize();
+            delayUtil.randomDelay(1000, 2000);
 
-                try {
-                    Lead lead = extractLeadFromResult(driver, result, wait, request);
-                    if (lead != null && !lead.getHasWebsite()) {
-                        leads.add(lead);
-                        log.debug("Added no-website lead: {}", lead.getBusinessName());
+            while (leads.size() < request.getLimit()) {
+                List<WebElement> cards = driver.findElements(RESULT_ITEMS);
+                int currentCount = cards.size();
+
+                log.info("Processing batch | visible cards = {}", currentCount);
+
+                if (currentCount == previousCount) {
+                    stagnantCount++;
+                    if (stagnantCount >= 2) {
+                        log.info("No new cards after 2 checks – stopping");
+                        break;
                     }
-                } catch (Exception e) {
-                    log.warn("Failed to process one Google Maps listing (skipping)", e);
+                } else {
+                    stagnantCount = 0;
                 }
+                previousCount = currentCount;
 
-                processed++;
-                if (processed % 5 == 0) {
+                for (int i = processed; i < currentCount && leads.size() < request.getLimit(); i++) {
+                    try {
+                        // Re-fetch fresh list (critical!)
+                        cards = driver.findElements(RESULT_ITEMS);
+                        if (i >= cards.size()) break;
+
+                        WebElement card = cards.get(i);
+
+                        Lead lead = extractLeadFromResult(driver, card, wait, request);
+
+                        if (lead != null && Boolean.FALSE.equals(lead.getHasWebsite())) {
+                            leads.add(lead);
+                            log.debug("Added no-website lead: {}", lead.getBusinessName());
+                        }
+
+                    } catch (StaleElementReferenceException e) {
+                        log.warn("Stale element at index {} – skipping", i);
+                    } catch (Exception e) {
+                        log.warn("Failed to process listing index {} (skipping)", i, e);
+                    }
+
+                    processed++;
                     delayUtil.humanLikeDelay();
                 }
+
+                // If no progress after full pass → stop
+                if (processed >= currentCount && stagnantCount >= 2) break;
+
+                // Try one more scroll if needed
+                scrollResultsPanel(driver, wait);
             }
 
-            log.info("Google Maps scrape completed | leadsFound={} (no-website only) | duration={}ms",
-                    leads.size(), System.currentTimeMillis() - startTime);
+            long duration = System.currentTimeMillis() - startTime;
+            log.info("Google Maps scrape completed | leadsFound={} (no-website) | duration={}ms", leads.size(), duration);
 
-            List<LeadResponse> leadResponses = leads.stream()
-                    .map(LeadResponse::fromEntity)   // or your mapping method
-                    .toList();
+            List<LeadResponse> responses = leads.stream().map(LeadResponse::fromEntity).toList();
 
             return ScrapeResponse.builder()
                     .source(getSourceName())
-                    .leads(leadResponses)
-                    .totalFound(leadResponses.size())
+                    .leads(responses)
+                    .totalFound(responses.size())
                     .success(true)
-                    .durationMs(System.currentTimeMillis() - startTime)
+                    .durationMs(duration)
                     .jobId(request.getJobId())
                     .build();
 
         } catch (Exception e) {
-            log.error("Google Maps scrape failed", e);
+            log.error("Google Maps scrape failed critically", e);
             return ScrapeResponse.builder()
                     .source(getSourceName())
                     .leads(new ArrayList<>())
@@ -151,81 +183,138 @@ public class GoogleMapsScraper implements ScraperStrategy {
                     .jobId(request.getJobId())
                     .build();
         } finally {
-            cleanup(driver); // always quit
+            cleanup(driver);
         }
     }
 
     private void scrollResultsPanel(WebDriver driver, WebDriverWait wait) {
         try {
             WebElement panel = wait.until(ExpectedConditions.presenceOfElementLocated(RESULTS_PANEL));
-            long lastHeight = (long) ((JavascriptExecutor) driver).executeScript("return arguments[0].scrollHeight", panel);
 
-            for (int i = 0; i < MAX_SCROLL_ATTEMPTS; i++) {
-                ((JavascriptExecutor) driver).executeScript("arguments[0].scrollTop = arguments[0].scrollHeight", panel);
-                delayUtil.randomDelay(800, 1800);
+            int prevCount = driver.findElements(RESULT_ITEMS).size();
+            int noProgress = 0;
 
-                long newHeight = (long) ((JavascriptExecutor) driver).executeScript("return arguments[0].scrollHeight", panel);
-                if (newHeight == lastHeight) {
-                    break; // no more results
+            for (int attempt = 0; attempt < MAX_SCROLL_ATTEMPTS; attempt++) {
+                ((JavascriptExecutor) driver).executeScript("arguments[0].scrollTop = arguments[0].scrollHeight;", panel);
+                delayUtil.randomDelay(2500, 4500); // longer delay for AJAX load
+
+                int newCount = driver.findElements(RESULT_ITEMS).size();
+                log.debug("Scroll attempt {} → cards: {}", attempt + 1, newCount);
+
+                if (newCount == prevCount) {
+                    noProgress++;
+                    if (noProgress >= 2) {
+                        log.info("Scroll stopped – no new results after 2 attempts");
+                        break;
+                    }
+                } else {
+                    noProgress = 0;
                 }
-                lastHeight = newHeight;
+                prevCount = newCount;
             }
         } catch (Exception e) {
-            log.warn("Scroll failed (non-critical)", e);
+            log.warn("Scroll failed (non-fatal)", e);
         }
     }
 
     private Lead extractLeadFromResult(WebDriver driver, WebElement resultCard, WebDriverWait wait, ScrapeRequest request) {
-        // Click to open details panel
-        ((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView({block: 'center'});", resultCard);
-        delayUtil.randomDelay(600, 1200);
-        resultCard.click();
-
-        wait.until(ExpectedConditions.presenceOfElementLocated(NAME_SELECTOR));
-
-        Lead.LeadBuilder builder = Lead.builder()
-                .category(request.getBusinessType())
-                .city(request.getLocation())
-                .source("GoogleMaps")
-                .jobId(request.getJobId())
-                .status(LeadStatus.NEW);
-
-        // Name
-        String name = scraperUtils.safeGetText(driver, NAME_SELECTOR, "Unknown Business");
-        builder.businessName(name);
-
-        // Phone
-        String phone = scraperUtils.safeGetText(driver, PHONE_SELECTOR, "");
-        if (!phone.isEmpty()) {
-            builder.phoneNumber(phone.replaceAll("[^0-9+]", ""));
-        }
-
-        // Address
-        String address = scraperUtils.safeGetText(driver, ADDRESS_SELECTOR, "");
-        builder.fullAddress(address);
-
-        // Rating
-        String ratingText = scraperUtils.safeGetText(driver, RATING_SELECTOR, "0");
         try {
-            builder.rating(Double.parseDouble(ratingText.replaceAll("[^0-9.]", "")));
-        } catch (Exception ignored) {}
+            // 1. Force scroll + make sure card is in viewport
+            ((JavascriptExecutor) driver).executeScript(
+                    "arguments[0].scrollIntoView({block: 'center', inline: 'center'});",
+                    resultCard
+            );
+            delayUtil.randomDelay(1200, 2200);  // give time for any animation
 
-        // Website check (most important)
-        boolean hasWebsite = !driver.findElements(WEBSITE_SELECTOR).isEmpty();
-        builder.website(hasWebsite ? "has-website" : null); // dummy value
-        builder.hasWebsite(hasWebsite);
+            // 2. Force visibility & remove potential overlays via JS (aggressive but effective)
+            ((JavascriptExecutor) driver).executeScript(
+                    "arguments[0].style.zIndex = '9999'; " +
+                            "arguments[0].style.pointerEvents = 'auto'; " +
+                            "arguments[0].style.visibility = 'visible'; " +
+                            "arguments[0].style.display = 'block';",
+                    resultCard
+            );
 
-        // If has website → skip (we only want NO website)
-        if (hasWebsite) {
+            // 3. Attempt JS click (bypasses most overlays & click-interception)
+            boolean clicked = false;
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    ((JavascriptExecutor) driver).executeScript("arguments[0].click();", resultCard);
+                    clicked = true;
+                    log.debug("JS click succeeded on card");
+                    break;
+                } catch (Exception e) {
+                    log.debug("JS click attempt {} failed, retrying...", attempt + 1);
+                    delayUtil.quickDelay();
+                }
+            }
+
+            if (!clicked) {
+                // Last resort: try native click with short wait
+                try {
+                    wait.withTimeout(Duration.ofSeconds(6))
+                            .until(ExpectedConditions.elementToBeClickable(resultCard));
+                    resultCard.click();
+                    clicked = true;
+                } catch (TimeoutException ignored) {
+                    log.warn("Native click also timed out – skipping this card");
+                }
+            }
+
+            if (!clicked) {
+                return null;  // couldn't open details → skip
+            }
+
+            // 4. Wait for details panel (name is most reliable indicator)
+            try {
+                wait.until(ExpectedConditions.presenceOfElementLocated(NAME_SELECTOR));
+            } catch (TimeoutException e) {
+                log.warn("Details panel did not load after click – skipping");
+                return null;
+            }
+
+            // 5. Proceed with extraction (same as before)
+            Lead.LeadBuilder builder = Lead.builder()
+                    .category(request.getBusinessType())
+                    .city(request.getLocation())
+                    .source("GoogleMaps")
+                    .jobId(request.getJobId())
+                    .status(LeadStatus.NEW);
+
+            String name = scraperUtils.safeGetText(driver, NAME_SELECTOR, "Unknown Business");
+            builder.businessName(name);
+
+            String phone = scraperUtils.safeGetText(driver, PHONE_SELECTOR, "");
+            if (!phone.isEmpty()) {
+                builder.phoneNumber(phone.replaceAll("[^0-9+]", "").trim());
+            }
+
+            String address = scraperUtils.safeGetText(driver, ADDRESS_SELECTOR, "");
+            builder.fullAddress(address);
+
+            String ratingText = scraperUtils.safeGetText(driver, RATING_SELECTOR, "0");
+            try {
+                builder.rating(Double.parseDouble(ratingText.replaceAll("[^0-9.]", "")));
+            } catch (Exception ignored) {}
+
+            boolean hasWebsite = !driver.findElements(WEBSITE_SELECTOR).isEmpty();
+            builder.hasWebsite(hasWebsite);
+            builder.website(hasWebsite ? "has-website" : null);
+
+            if (hasWebsite) {
+                log.debug("Skipped – has website: {}", name);
+                return null;
+            }
+
+            builder.locality(scraperUtils.extractLocalityFromAddress(address));
+
+            return builder.build();
+
+        } catch (Exception e) {
+            log.warn("Extraction failed for one listing", e);
             return null;
         }
-
-        // Extract full address/locality if needed (extra logic)
-        builder.locality(scraperUtils.extractLocalityFromAddress(address));
-
-        return builder.build();
     }
-
     @Override
     public String getSourceName() {
         return "GoogleMaps";
@@ -234,12 +323,7 @@ public class GoogleMapsScraper implements ScraperStrategy {
     @Override
     public boolean supports(ScrapeRequest request) {
         return "GoogleMaps".equalsIgnoreCase(request.getSource()) ||
-                request.getSource() == null; // default fallback
-    }
-
-    @Override
-    public void cleanup() {
-        // Driver is passed and quit in finally block
+                request.getSource() == null;
     }
 
     private void cleanup(WebDriver driver) {
@@ -251,5 +335,10 @@ public class GoogleMapsScraper implements ScraperStrategy {
                 log.warn("Error quitting WebDriver", e);
             }
         }
+    }
+
+    @Override
+    public void cleanup() {
+        // Handled in finally block
     }
 }
